@@ -1,0 +1,6 @@
+streamlit
+pandas
+google-search-results
+nltk
+matplotlib
+wordcloud
