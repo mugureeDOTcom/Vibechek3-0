@@ -18,8 +18,8 @@ except LookupError:
     nltk.download("vader_lexicon", quiet=True)
 
 # Page configuration
-st.set_page_config(page_title="VibeScraper AI Dashboard", layout="wide")
-st.title("🧠 VibeScraper: Google Review Analyzer")
+st.set_page_config(page_title="VibeChek AI Dashboard", layout="wide")
+st.title("🧠 VibeChek: Google Review Analyzer")
 
 st.markdown("""
 **Don't know your Place ID?**
