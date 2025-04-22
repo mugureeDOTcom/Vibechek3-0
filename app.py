@@ -11,6 +11,9 @@ from wordcloud import WordCloud
 import base64
 from collections import Counter
 
+# Page configuration MUST be the first Streamlit command
+st.set_page_config(page_title="VibeChek AI Dashboard", layout="wide")
+
 # Define standard figure sizes for consistent display
 FIGURE_SIZES = {
     "large": (7, 3.5),      # For main visualizations
@@ -54,8 +57,6 @@ try:
 except LookupError:
     nltk.download("vader_lexicon", quiet=True)
 
-# Page configuration
-st.set_page_config(page_title="VibeChek AI Dashboard", layout="wide")
 st.title("🧠 VibeChek: Google Review Analyzer")
 
 st.markdown("""
