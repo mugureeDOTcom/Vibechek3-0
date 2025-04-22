@@ -273,7 +273,8 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
             
             # Simple ratings analysis with colorful bars
             if "rating" in df.columns and df["rating"].notna().any():
-                fig, ax = plt.subplots(figsize=FIGURE_SIZES["medium"])
+                # Create a figure with adjusted height to accommodate the legend
+                fig, ax = plt.subplots(figsize=(FIGURE_SIZES["medium"][0], FIGURE_SIZES["medium"][1] + 0.5))
                 
                 # Ensure we're working with numeric ratings and convert to integers if needed
                 df['rating_num'] = pd.to_numeric(df['rating'], errors='coerce')
@@ -323,6 +324,7 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
                 ax.set_ylim(bottom=0)
                 
                 # Add a legend explaining the color scheme - with smaller font
+                # MOVED BELOW THE PLOT
                 from matplotlib.patches import Patch
                 legend_elements = [
                     Patch(facecolor='#d73027', label='1 Star'),
@@ -331,8 +333,18 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
                     Patch(facecolor='#91cf60', label='4 Stars'),
                     Patch(facecolor='#1a9850', label='5 Stars')
                 ]
-                ax.legend(handles=legend_elements, title="Rating Colors", 
-                          loc='upper right', fontsize=7, title_fontsize=8)
+                
+                # Place legend below the plot
+                ax.legend(handles=legend_elements, 
+                          title="Rating Colors", 
+                          loc='upper center', 
+                          bbox_to_anchor=(0.5, -0.15),
+                          ncol=5, 
+                          fontsize=7, 
+                          title_fontsize=8)
+                
+                # Adjust figure to make room for the legend
+                plt.subplots_adjust(bottom=0.2)
                 
                 # Improve layout
                 plt.tight_layout()
