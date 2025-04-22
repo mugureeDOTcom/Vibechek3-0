@@ -14,16 +14,16 @@ from collections import Counter
 # Define standard figure sizes for consistent display
 FIGURE_SIZES = {
     "large": (7, 3.5),      # For main visualizations
-    "medium": (5, 3),       # For secondary visualizations
-    "small": (4, 2.5),      # For compact visualizations
-    "pie": (3.5, 3)         # Specifically for pie charts
+    "medium": (4, 2.5),     # For secondary visualizations - MADE SMALLER
+    "small": (3.5, 2.3),    # For compact visualizations - MADE SMALLER
+    "pie": (3, 2.5)         # Specifically for pie charts - MADE SMALLER
 }
 
 # Add custom CSS for better spacing and containment
 st.markdown("""
 <style>
     .plot-container {
-        max-width: 95%;
+        max-width: 90%;
         margin: 0 auto;
     }
     .section-divider {
@@ -33,6 +33,17 @@ st.markdown("""
     .subsection-divider {
         margin-top: 1em;
         margin-bottom: 0.5em;
+    }
+    /* Make all charts and visualizations more compact */
+    .stPlotlyChart, .stChart {
+        max-width: 90% !important;
+        margin: 0 auto !important;
+    }
+    /* Add custom scaling for better fit */
+    div[data-testid="stImage"] img {
+        max-width: 90% !important;
+        display: block !important;
+        margin: 0 auto !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -204,24 +215,25 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
                 # Create the plot
                 bars = ax.bar(ratings, counts, color=bar_colors)
                 
-                # Add rating values on top of each bar
+                # Add rating values on top of each bar - with smaller font
                 for bar, count in zip(bars, counts):
                     height = bar.get_height()
                     ax.text(bar.get_x() + bar.get_width()/2., height + 0.5,
-                            str(int(count)), ha='center', va='bottom', fontweight='bold')
+                            str(int(count)), ha='center', va='bottom', fontweight='bold', fontsize=8)
                 
-                # Set labels and title
-                ax.set_xlabel("Rating", fontsize=11)
-                ax.set_ylabel("Count", fontsize=11)
-                ax.set_title("Rating Distribution", fontsize=12)
+                # Set labels and title with smaller font
+                ax.set_xlabel("Rating", fontsize=9)
+                ax.set_ylabel("Count", fontsize=9)
+                ax.set_title("Rating Distribution", fontsize=10)
                 
                 # Set x-axis ticks - explicitly use only integer ratings from 1-5
                 ax.set_xticks([1, 2, 3, 4, 5])
+                ax.tick_params(axis='both', which='major', labelsize=8)
                 
                 # Set y-axis to start at 0
                 ax.set_ylim(bottom=0)
                 
-                # Add a legend explaining the color scheme
+                # Add a legend explaining the color scheme - with smaller font
                 from matplotlib.patches import Patch
                 legend_elements = [
                     Patch(facecolor='#d73027', label='1 Star'),
@@ -231,7 +243,7 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
                     Patch(facecolor='#1a9850', label='5 Stars')
                 ]
                 ax.legend(handles=legend_elements, title="Rating Colors", 
-                          loc='upper right', fontsize=9)
+                          loc='upper right', fontsize=7, title_fontsize=8)
                 
                 # Improve layout
                 plt.tight_layout()
@@ -299,16 +311,21 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
             st.subheader("📊 Sentiment Analysis")
             sentiment_counts = df["Sentiment"].value_counts()
             
-            # RESIZED pie chart
+            # RESIZED pie chart and smaller fonts
             fig, ax = plt.subplots(figsize=FIGURE_SIZES["pie"])
             colors = {'Positive': 'green', 'Neutral': 'gray', 'Negative': 'red'}
-            ax.pie(
+            wedges, texts, autotexts = ax.pie(
                 sentiment_counts, 
                 labels=sentiment_counts.index, 
                 autopct='%1.1f%%',
-                colors=[colors.get(x, 'blue') for x in sentiment_counts.index]
+                colors=[colors.get(x, 'blue') for x in sentiment_counts.index],
+                textprops={'fontsize': 8}
             )
-            ax.set_title("Sentiment Distribution", fontsize=12)
+            for autotext in autotexts:
+                autotext.set_fontsize(8)
+            
+            ax.set_title("Sentiment Distribution", fontsize=10)
+            plt.tight_layout()
             
             # Show the plot with container
             st.markdown('<div class="plot-container">', unsafe_allow_html=True)
@@ -356,20 +373,21 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
                 # Create the timeline visualization with RESIZED dimensions
                 fig, ax = plt.subplots(figsize=FIGURE_SIZES["large"])
                 
-                # Plot each sentiment type
-                ax.plot(pivot_data["month_year"], pivot_data["Positive"], marker='o', color='green', label='Positive')
-                ax.plot(pivot_data["month_year"], pivot_data["Negative"], marker='x', color='red', label='Negative')
+                # Plot each sentiment type with smaller markers and fonts
+                ax.plot(pivot_data["month_year"], pivot_data["Positive"], marker='o', markersize=4, color='green', label='Positive')
+                ax.plot(pivot_data["month_year"], pivot_data["Negative"], marker='x', markersize=4, color='red', label='Negative')
                 if "Neutral" in pivot_data.columns:
-                    ax.plot(pivot_data["month_year"], pivot_data["Neutral"], marker='s', color='gray', label='Neutral')
+                    ax.plot(pivot_data["month_year"], pivot_data["Neutral"], marker='s', markersize=4, color='gray', label='Neutral')
                 
-                # Rotate x-axis labels for better readability
-                plt.xticks(rotation=45, ha='right')
+                # Rotate x-axis labels for better readability and use smaller font
+                plt.xticks(rotation=45, ha='right', fontsize=8)
+                plt.yticks(fontsize=8)
                 
-                # Add labels and legend
-                ax.set_xlabel("Month", fontsize=11)
-                ax.set_ylabel("Number of Reviews", fontsize=11)
-                ax.set_title("Sentiment Trends Over Time", fontsize=12)
-                ax.legend()
+                # Add labels and legend with smaller fonts
+                ax.set_xlabel("Month", fontsize=9)
+                ax.set_ylabel("Number of Reviews", fontsize=9)
+                ax.set_title("Sentiment Trends Over Time", fontsize=10)
+                ax.legend(fontsize=8)
                 
                 # Improve layout
                 plt.tight_layout()
@@ -425,7 +443,8 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
                 if len(pos_reviews) > 0:
                     pos_text = " ".join(pos_reviews)
                     if len(pos_text) > 50:  # Ensure we have enough text
-                        wc_pos = WordCloud(width=400, height=300, background_color="white").generate(pos_text)
+                        # Smaller word cloud
+                        wc_pos = WordCloud(width=300, height=200, background_color="white").generate(pos_text)
                         # RESIZED word cloud
                         fig, ax = plt.subplots(figsize=FIGURE_SIZES["small"])
                         ax.imshow(wc_pos, interpolation='bilinear')
@@ -442,7 +461,8 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
                 if len(neg_reviews) > 0:
                     neg_text = " ".join(neg_reviews)
                     if len(neg_text) > 50:  # Ensure we have enough text
-                        wc_neg = WordCloud(width=400, height=300, background_color="black", colormap="Reds").generate(neg_text)
+                        # Smaller word cloud
+                        wc_neg = WordCloud(width=300, height=200, background_color="black", colormap="Reds").generate(neg_text)
                         # RESIZED word cloud
                         fig, ax = plt.subplots(figsize=FIGURE_SIZES["small"])
                         ax.imshow(wc_neg, interpolation='bilinear')
@@ -495,11 +515,19 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
             pos_words = get_top_words(df[df["Sentiment"] == "Positive"]["Cleaned_Review"])
             
             if pos_words:
-                # Create a bar chart with RESIZED dimensions
+                # Create a bar chart with RESIZED dimensions and smaller fonts
                 pos_df = pd.DataFrame(pos_words, columns=['Word', 'Count'])
                 fig, ax = plt.subplots(figsize=FIGURE_SIZES["small"])
-                ax.barh(pos_df['Word'][::-1], pos_df['Count'][::-1], color='green')
-                ax.set_title("Top Words in Positive Reviews", fontsize=11)
+                bars = ax.barh(pos_df['Word'][::-1], pos_df['Count'][::-1], color='green')
+                
+                # Add count values next to each bar
+                for bar in bars:
+                    width = bar.get_width()
+                    ax.text(width + 0.3, bar.get_y() + bar.get_height()/2, 
+                            str(int(width)), va='center', fontsize=7)
+                            
+                ax.set_title("Top Words in Positive Reviews", fontsize=9)
+                ax.tick_params(axis='both', which='major', labelsize=8)
                 plt.tight_layout()
                 st.pyplot(fig)
             else:
@@ -510,11 +538,19 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
             neg_words = get_top_words(df[df["Sentiment"] == "Negative"]["Cleaned_Review"])
             
             if neg_words:
-                # Create a bar chart with RESIZED dimensions
+                # Create a bar chart with RESIZED dimensions and smaller fonts
                 neg_df = pd.DataFrame(neg_words, columns=['Word', 'Count'])
                 fig, ax = plt.subplots(figsize=FIGURE_SIZES["small"])
-                ax.barh(neg_df['Word'][::-1], neg_df['Count'][::-1], color='red')
-                ax.set_title("Top Words in Negative Reviews", fontsize=11)
+                bars = ax.barh(neg_df['Word'][::-1], neg_df['Count'][::-1], color='red')
+                
+                # Add count values next to each bar
+                for bar in bars:
+                    width = bar.get_width()
+                    ax.text(width + 0.3, bar.get_y() + bar.get_height()/2, 
+                            str(int(width)), va='center', fontsize=7)
+                            
+                ax.set_title("Top Words in Negative Reviews", fontsize=9)
+                ax.tick_params(axis='both', which='major', labelsize=8)
                 plt.tight_layout()
                 st.pyplot(fig)
             else:
