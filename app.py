@@ -11,6 +11,32 @@ from wordcloud import WordCloud
 import base64
 from collections import Counter
 
+# Define standard figure sizes for consistent display
+FIGURE_SIZES = {
+    "large": (7, 3.5),      # For main visualizations
+    "medium": (5, 3),       # For secondary visualizations
+    "small": (4, 2.5),      # For compact visualizations
+    "pie": (3.5, 3)         # Specifically for pie charts
+}
+
+# Add custom CSS for better spacing and containment
+st.markdown("""
+<style>
+    .plot-container {
+        max-width: 95%;
+        margin: 0 auto;
+    }
+    .section-divider {
+        margin-top: 2em;
+        margin-bottom: 1em;
+    }
+    .subsection-divider {
+        margin-top: 1em;
+        margin-bottom: 0.5em;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 # Download NLTK data at startup
 try:
     nltk.data.find('vader_lexicon')
@@ -145,9 +171,9 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
             # Clean reviews
             df["Cleaned_Review"] = df["snippet"].apply(clean_text)
             
-            # Simple ratings analysis with colorful bars - FIXED VERSION
+            # Simple ratings analysis with colorful bars - FIXED VERSION & RESIZED
             if "rating" in df.columns and df["rating"].notna().any():
-                fig, ax = plt.subplots(figsize=(6, 4))
+                fig, ax = plt.subplots(figsize=FIGURE_SIZES["medium"])  # RESIZED
                 
                 # Ensure we're working with numeric ratings and convert to integers if needed
                 df['rating_num'] = pd.to_numeric(df['rating'], errors='coerce')
@@ -185,9 +211,9 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
                             str(int(count)), ha='center', va='bottom', fontweight='bold')
                 
                 # Set labels and title
-                ax.set_xlabel("Rating", fontsize=12)
-                ax.set_ylabel("Count", fontsize=12)
-                ax.set_title("Rating Distribution", fontsize=14)
+                ax.set_xlabel("Rating", fontsize=11)
+                ax.set_ylabel("Count", fontsize=11)
+                ax.set_title("Rating Distribution", fontsize=12)
                 
                 # Set x-axis ticks - explicitly use only integer ratings from 1-5
                 ax.set_xticks([1, 2, 3, 4, 5])
@@ -205,15 +231,18 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
                     Patch(facecolor='#1a9850', label='5 Stars')
                 ]
                 ax.legend(handles=legend_elements, title="Rating Colors", 
-                          loc='upper right', fontsize=10)
+                          loc='upper right', fontsize=9)
                 
                 # Improve layout
                 plt.tight_layout()
                 
-                # Show the plot
+                # Show the plot with container
+                st.markdown('<div class="plot-container">', unsafe_allow_html=True)
                 st.pyplot(fig)
+                st.markdown('</div>', unsafe_allow_html=True)
+                st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
             
-            # Sentiment Analysis with VADER only
+            # Enhanced Sentiment Analysis
             sia = SentimentIntensityAnalyzer()
             
             def vader_sentiment(text):
@@ -222,13 +251,56 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
                 score = sia.polarity_scores(text)["compound"]
                 return "Positive" if score >= 0.05 else "Negative" if score <= -0.05 else "Neutral"
             
-            df["Sentiment"] = df["Cleaned_Review"].apply(vader_sentiment)
+            # Enhanced business-specific sentiment analysis
+            def enhanced_business_sentiment(text):
+                if not text:
+                    return "Neutral"
+                
+                # Get the base VADER scores
+                score = sia.polarity_scores(text)["compound"]
+                
+                # Business-specific sentiment boosters
+                business_positive = [
+                    'recommend', 'excellent', 'amazing', 'love', 'best', 
+                    'friendly', 'helpful', 'clean', 'professional', 'fresh',
+                    'worth', 'perfect', 'fantastic', 'awesome', 'definitely'
+                ]
+                
+                business_negative = [
+                    'waste', 'overpriced', 'rude', 'slow', 'dirty',
+                    'terrible', 'horrible', 'avoid', 'disappointing', 'cold',
+                    'manager', 'complained', 'waiting', 'problem', 'never again'
+                ]
+                
+                # Check for business-specific terms and adjust score
+                text_lower = text.lower()
+                
+                # Apply modest boosts to the compound score for business-specific terms
+                for term in business_positive:
+                    if term in text_lower:
+                        score = min(1.0, score + 0.05)
+                        
+                for term in business_negative:
+                    if term in text_lower:
+                        score = max(-1.0, score - 0.05)
+                
+                # Adjust thresholds for business reviews (they tend to be more polarized)
+                if score >= 0.1:
+                    return "Positive"
+                elif score <= -0.1:
+                    return "Negative"
+                else:
+                    return "Neutral"
+            
+            # Apply enhanced sentiment analysis
+            df["Sentiment"] = df["Cleaned_Review"].apply(enhanced_business_sentiment)
             
             # Show sentiment distribution
             st.subheader("📊 Sentiment Analysis")
             sentiment_counts = df["Sentiment"].value_counts()
             
-            fig, ax = plt.subplots(figsize=(5, 4))
+            # RESIZED pie chart
+            fig, ax = plt.subplots(figsize=FIGURE_SIZES["pie"])
             colors = {'Positive': 'green', 'Neutral': 'gray', 'Negative': 'red'}
             ax.pie(
                 sentiment_counts, 
@@ -236,10 +308,15 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
                 autopct='%1.1f%%',
                 colors=[colors.get(x, 'blue') for x in sentiment_counts.index]
             )
-            ax.set_title("Sentiment Distribution")
+            ax.set_title("Sentiment Distribution", fontsize=12)
+            
+            # Show the plot with container
+            st.markdown('<div class="plot-container">', unsafe_allow_html=True)
             st.pyplot(fig)
+            st.markdown('</div>', unsafe_allow_html=True)
             
             # Show the data
+            st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
             st.subheader("📋 Review Data")
             st.dataframe(df[["snippet", "Sentiment"]].head(10))
     
@@ -249,6 +326,7 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
     # Timeline Analysis - trends over time
     try:
         if "time" in df.columns and df["time"].notna().any():
+            st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
             st.subheader("📈 Sentiment Timeline")
             
             # Convert time values to datetime (SerpAPI returns timestamps)
@@ -275,8 +353,8 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
                 pivot_data = pivot_data.sort_values("month_year")
                 pivot_data["month_year"] = pivot_data["month_year"].dt.strftime('%Y-%m')
                 
-                # Create the timeline visualization with smaller size
-                fig, ax = plt.subplots(figsize=(8, 4))
+                # Create the timeline visualization with RESIZED dimensions
+                fig, ax = plt.subplots(figsize=FIGURE_SIZES["large"])
                 
                 # Plot each sentiment type
                 ax.plot(pivot_data["month_year"], pivot_data["Positive"], marker='o', color='green', label='Positive')
@@ -288,16 +366,18 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
                 plt.xticks(rotation=45, ha='right')
                 
                 # Add labels and legend
-                ax.set_xlabel("Month")
-                ax.set_ylabel("Number of Reviews")
-                ax.set_title("Sentiment Trends Over Time")
+                ax.set_xlabel("Month", fontsize=11)
+                ax.set_ylabel("Number of Reviews", fontsize=11)
+                ax.set_title("Sentiment Trends Over Time", fontsize=12)
                 ax.legend()
                 
                 # Improve layout
                 plt.tight_layout()
                 
-                # Show the plot
+                # Show the plot with container
+                st.markdown('<div class="plot-container">', unsafe_allow_html=True)
                 st.pyplot(fig)
+                st.markdown('</div>', unsafe_allow_html=True)
                 
                 # Show insights about the timeline
                 if len(pivot_data) > 1:
@@ -336,6 +416,7 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
     # Word Clouds - only if we have enough data
     try:
         if len(df) > 5:
+            st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
             st.subheader("☁️ Word Clouds")
             col1, col2 = st.columns(2)
             
@@ -345,7 +426,8 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
                     pos_text = " ".join(pos_reviews)
                     if len(pos_text) > 50:  # Ensure we have enough text
                         wc_pos = WordCloud(width=400, height=300, background_color="white").generate(pos_text)
-                        fig, ax = plt.subplots(figsize=(4, 3))
+                        # RESIZED word cloud
+                        fig, ax = plt.subplots(figsize=FIGURE_SIZES["small"])
                         ax.imshow(wc_pos, interpolation='bilinear')
                         ax.axis("off")
                         st.pyplot(fig)
@@ -361,7 +443,8 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
                     neg_text = " ".join(neg_reviews)
                     if len(neg_text) > 50:  # Ensure we have enough text
                         wc_neg = WordCloud(width=400, height=300, background_color="black", colormap="Reds").generate(neg_text)
-                        fig, ax = plt.subplots(figsize=(4, 3))
+                        # RESIZED word cloud
+                        fig, ax = plt.subplots(figsize=FIGURE_SIZES["small"])
                         ax.imshow(wc_neg, interpolation='bilinear')
                         ax.axis("off")
                         st.pyplot(fig)
@@ -376,6 +459,7 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
     
     # Top words analysis - simple word frequency analysis
     try:
+        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
         st.subheader("🔍 Common Words Analysis")
         
         def get_top_words(reviews, n=10):
@@ -411,11 +495,11 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
             pos_words = get_top_words(df[df["Sentiment"] == "Positive"]["Cleaned_Review"])
             
             if pos_words:
-                # Create a bar chart with smaller size
+                # Create a bar chart with RESIZED dimensions
                 pos_df = pd.DataFrame(pos_words, columns=['Word', 'Count'])
-                fig, ax = plt.subplots(figsize=(5, 3))
+                fig, ax = plt.subplots(figsize=FIGURE_SIZES["small"])
                 ax.barh(pos_df['Word'][::-1], pos_df['Count'][::-1], color='green')
-                ax.set_title("Top Words in Positive Reviews")
+                ax.set_title("Top Words in Positive Reviews", fontsize=11)
                 plt.tight_layout()
                 st.pyplot(fig)
             else:
@@ -426,11 +510,11 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
             neg_words = get_top_words(df[df["Sentiment"] == "Negative"]["Cleaned_Review"])
             
             if neg_words:
-                # Create a bar chart with smaller size
+                # Create a bar chart with RESIZED dimensions
                 neg_df = pd.DataFrame(neg_words, columns=['Word', 'Count'])
-                fig, ax = plt.subplots(figsize=(5, 3))
+                fig, ax = plt.subplots(figsize=FIGURE_SIZES["small"])
                 ax.barh(neg_df['Word'][::-1], neg_df['Count'][::-1], color='red')
-                ax.set_title("Top Words in Negative Reviews")
+                ax.set_title("Top Words in Negative Reviews", fontsize=11)
                 plt.tight_layout()
                 st.pyplot(fig)
             else:
@@ -441,6 +525,7 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
     
     # Simple AI Recommendations
     try:
+        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
         st.subheader("🤖 Smart Recommendations")
         
         # Define common business issues and solutions based on keywords
@@ -588,6 +673,7 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
                 
         # Add a section for actionable next steps
         if positive_insights or negative_insights:
+            st.markdown('<div class="subsection-divider"></div>', unsafe_allow_html=True)
             st.markdown("### 📝 Actionable Next Steps")
             
             action_items = []
@@ -616,6 +702,7 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
     
     # Download Results
     try:
+        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
         st.subheader("📎 Download Your Results")
         
         # Create download button for dataframe
