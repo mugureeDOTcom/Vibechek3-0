@@ -145,39 +145,72 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
             # Clean reviews
             df["Cleaned_Review"] = df["snippet"].apply(clean_text)
             
-            # Simple ratings analysis with colorful bars
+            # Simple ratings analysis with colorful bars - FIXED VERSION
             if "rating" in df.columns and df["rating"].notna().any():
                 fig, ax = plt.subplots(figsize=(6, 4))
-                rating_counts = df["rating"].value_counts().sort_index()
                 
-                # Define a color map - darker green for 5, lighter greens for 4, yellow for 3, 
-                # orange for 2, and red for 1
-                colors = {
-                    5: '#1a9850',  # Dark green
-                    4: '#91cf60',  # Light green
-                    3: '#ffffbf',  # Yellow
-                    2: '#fc8d59',  # Orange
-                    1: '#d73027'   # Red
+                # Ensure we're working with numeric ratings and convert to integers if needed
+                df['rating_num'] = pd.to_numeric(df['rating'], errors='coerce')
+                rating_counts = df['rating_num'].value_counts().sort_index()
+                
+                # Define color map - use both integer and float keys to handle both types
+                color_map = {
+                    1: '#d73027', 1.0: '#d73027',     # Red
+                    2: '#fc8d59', 2.0: '#fc8d59',     # Orange
+                    3: '#ffffbf', 3.0: '#ffffbf',     # Yellow
+                    4: '#91cf60', 4.0: '#91cf60',     # Light green
+                    5: '#1a9850', 5.0: '#1a9850',     # Dark green
                 }
                 
-                # Create a list of colors for each bar
-                bar_colors = [colors.get(rating, '#4575b4') for rating in rating_counts.index]
+                # Explicitly create arrays for plotting rather than using pandas series directly
+                ratings = rating_counts.index.tolist()
+                counts = rating_counts.values.tolist()
                 
-                # Plot with different colors
-                ax.bar(rating_counts.index, rating_counts.values, color=bar_colors)
+                # Create a list of colors for each bar - with fallback default color
+                bar_colors = []
+                for rating in ratings:
+                    if rating in color_map:
+                        bar_colors.append(color_map[rating])
+                    else:
+                        # Fallback to blue if we somehow get an unexpected rating
+                        bar_colors.append('#4575b4')
+                
+                # Create the plot
+                bars = ax.bar(ratings, counts, color=bar_colors)
                 
                 # Add rating values on top of each bar
-                for i, count in enumerate(rating_counts.values):
-                    ax.text(rating_counts.index[i], count + 0.5, str(count), 
-                            ha='center', va='bottom', fontweight='bold')
+                for bar, count in zip(bars, counts):
+                    height = bar.get_height()
+                    ax.text(bar.get_x() + bar.get_width()/2., height + 0.5,
+                            str(int(count)), ha='center', va='bottom', fontweight='bold')
                 
-                ax.set_xlabel("Rating")
-                ax.set_ylabel("Count")
-                ax.set_title("Rating Distribution")
+                # Set labels and title
+                ax.set_xlabel("Rating", fontsize=12)
+                ax.set_ylabel("Count", fontsize=12)
+                ax.set_title("Rating Distribution", fontsize=14)
                 
-                # Set x-axis ticks to only show integer values 1-5
-                ax.set_xticks(range(1, 6))
+                # Set x-axis ticks - explicitly use only integer ratings from 1-5
+                ax.set_xticks([1, 2, 3, 4, 5])
                 
+                # Set y-axis to start at 0
+                ax.set_ylim(bottom=0)
+                
+                # Add a legend explaining the color scheme
+                from matplotlib.patches import Patch
+                legend_elements = [
+                    Patch(facecolor='#d73027', label='1 Star'),
+                    Patch(facecolor='#fc8d59', label='2 Stars'),
+                    Patch(facecolor='#ffffbf', label='3 Stars'),
+                    Patch(facecolor='#91cf60', label='4 Stars'),
+                    Patch(facecolor='#1a9850', label='5 Stars')
+                ]
+                ax.legend(handles=legend_elements, title="Rating Colors", 
+                          loc='upper right', fontsize=10)
+                
+                # Improve layout
+                plt.tight_layout()
+                
+                # Show the plot
                 st.pyplot(fig)
             
             # Sentiment Analysis with VADER only
