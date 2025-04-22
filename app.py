@@ -145,14 +145,39 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
             # Clean reviews
             df["Cleaned_Review"] = df["snippet"].apply(clean_text)
             
-            # Simple ratings analysis
+            # Simple ratings analysis with colorful bars
             if "rating" in df.columns and df["rating"].notna().any():
                 fig, ax = plt.subplots(figsize=(6, 4))
                 rating_counts = df["rating"].value_counts().sort_index()
-                ax.bar(rating_counts.index, rating_counts.values)
+                
+                # Define a color map - darker green for 5, lighter greens for 4, yellow for 3, 
+                # orange for 2, and red for 1
+                colors = {
+                    5: '#1a9850',  # Dark green
+                    4: '#91cf60',  # Light green
+                    3: '#ffffbf',  # Yellow
+                    2: '#fc8d59',  # Orange
+                    1: '#d73027'   # Red
+                }
+                
+                # Create a list of colors for each bar
+                bar_colors = [colors.get(rating, '#4575b4') for rating in rating_counts.index]
+                
+                # Plot with different colors
+                ax.bar(rating_counts.index, rating_counts.values, color=bar_colors)
+                
+                # Add rating values on top of each bar
+                for i, count in enumerate(rating_counts.values):
+                    ax.text(rating_counts.index[i], count + 0.5, str(count), 
+                            ha='center', va='bottom', fontweight='bold')
+                
                 ax.set_xlabel("Rating")
                 ax.set_ylabel("Count")
                 ax.set_title("Rating Distribution")
+                
+                # Set x-axis ticks to only show integer values 1-5
+                ax.set_xticks(range(1, 6))
+                
                 st.pyplot(fig)
             
             # Sentiment Analysis with VADER only
