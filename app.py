@@ -17,9 +17,9 @@ st.set_page_config(page_title="VibeChek AI Dashboard", layout="wide")
 # Define standard figure sizes for consistent display
 FIGURE_SIZES = {
     "large": (7, 3.5),      # For main visualizations
-    "medium": (4, 2.5),     # For secondary visualizations - MADE SMALLER
-    "small": (3.5, 2.3),    # For compact visualizations - MADE SMALLER
-    "pie": (3, 2.5)         # Specifically for pie charts - MADE SMALLER
+    "medium": (4, 2.5),     # For secondary visualizations 
+    "small": (3.5, 2.3),    # For compact visualizations
+    "pie": (3, 2.5)         # Specifically for pie charts
 }
 
 # Add custom CSS for better spacing and containment
@@ -51,12 +51,105 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# Helper functions
+def clean_text(text):
+    """Clean text by removing URLs, special characters, and converting to lowercase"""
+    if not isinstance(text, str):
+        return ""
+    text = re.sub(r"http\S+", "", text)
+    text = re.sub(r"[^a-zA-Z0-9\s]", " ", text)
+    return text.strip().lower()
+
+def vader_sentiment(text):
+    """Basic VADER sentiment analysis"""
+    if not text:
+        return "Neutral"
+    score = sia.polarity_scores(text)["compound"]
+    return "Positive" if score >= 0.05 else "Negative" if score <= -0.05 else "Neutral"
+
+def enhanced_business_sentiment(text):
+    """Enhanced business-specific sentiment analysis"""
+    if not text:
+        return "Neutral"
+    
+    # Get the base VADER scores
+    score = sia.polarity_scores(text)["compound"]
+    
+    # Business-specific sentiment boosters
+    business_positive = [
+        'recommend', 'excellent', 'amazing', 'love', 'best', 
+        'friendly', 'helpful', 'clean', 'professional', 'fresh',
+        'worth', 'perfect', 'fantastic', 'awesome', 'definitely'
+    ]
+    
+    business_negative = [
+        'waste', 'overpriced', 'rude', 'slow', 'dirty',
+        'terrible', 'horrible', 'avoid', 'disappointing', 'cold',
+        'manager', 'complained', 'waiting', 'problem', 'never again'
+    ]
+    
+    # Check for business-specific terms and adjust score
+    text_lower = text.lower()
+    
+    # Apply modest boosts to the compound score for business-specific terms
+    for term in business_positive:
+        if term in text_lower:
+            score = min(1.0, score + 0.05)
+            
+    for term in business_negative:
+        if term in text_lower:
+            score = max(-1.0, score - 0.05)
+    
+    # Adjust thresholds for business reviews (they tend to be more polarized)
+    if score >= 0.1:
+        return "Positive"
+    elif score <= -0.1:
+        return "Negative"
+    else:
+        return "Neutral"
+
+def get_top_words(reviews, n=10):
+    """Extract and count the most common words in reviews"""
+    if not hasattr(reviews, 'any') or not reviews.any():
+        return []
+            
+    # Combine all review text
+    all_text = " ".join(reviews)
+    
+    # Split into words and count
+    words = re.findall(r'\b\w+\b', all_text.lower())
+    
+    # Simple stopwords filtering
+    stopwords = {'the', 'a', 'an', 'and', 'is', 'in', 'it', 'to', 'was', 'for', 
+                 'of', 'with', 'on', 'at', 'by', 'this', 'that', 'but', 'are', 
+                 'be', 'or', 'have', 'has', 'had', 'not', 'what', 'all', 'were', 
+                 'when', 'where', 'who', 'which', 'their', 'they', 'them', 'there',
+                 'from', 'out', 'some', 'would', 'about', 'been', 'many', 'us', 'we'}
+    
+    # Filter out stopwords and short words
+    filtered_words = [w for w in words if w not in stopwords and len(w) > 2]
+    
+    # Count word frequency
+    word_counts = Counter(filtered_words)
+    
+    # Return top N words
+    return word_counts.most_common(n)
+
+@st.cache_data
+def convert_df_to_csv(df):
+    """Convert dataframe to CSV for download"""
+    return df.to_csv(index=False).encode('utf-8')
+
 # Download NLTK data at startup
 try:
     nltk.data.find('vader_lexicon')
 except LookupError:
     nltk.download("vader_lexicon", quiet=True)
 
+# Initialize sentiment analyzer
+sia = SentimentIntensityAnalyzer()
+
+# App title and description
 st.title("🧠 VibeChek: Google Review Analyzer")
 
 st.markdown("""
@@ -85,14 +178,6 @@ place_id = st.text_input("📍 Enter Google Place ID")
 max_reviews = st.slider("🔄 How many reviews to fetch?", min_value=50, max_value=500, step=50, value=150)
 
 if st.button("🚀 Fetch & Analyze Reviews") and place_id:
-    # Function to clean text
-    def clean_text(text):
-        if not isinstance(text, str):
-            return ""
-        text = re.sub(r"http\S+", "", text)
-        text = re.sub(r"[^a-zA-Z0-9\s]", " ", text)
-        return text.strip().lower()
-    
     try:
         with st.spinner("Fetching reviews from Google Maps..."):
             # Create params with error handling
@@ -183,9 +268,12 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
             # Clean reviews
             df["Cleaned_Review"] = df["snippet"].apply(clean_text)
             
-            # Simple ratings analysis with colorful bars - FIXED VERSION & RESIZED
+            # Apply enhanced sentiment analysis
+            df["Sentiment"] = df["Cleaned_Review"].apply(enhanced_business_sentiment)
+            
+            # Simple ratings analysis with colorful bars
             if "rating" in df.columns and df["rating"].notna().any():
-                fig, ax = plt.subplots(figsize=FIGURE_SIZES["medium"])  # RESIZED
+                fig, ax = plt.subplots(figsize=FIGURE_SIZES["medium"])
                 
                 # Ensure we're working with numeric ratings and convert to integers if needed
                 df['rating_num'] = pd.to_numeric(df['rating'], errors='coerce')
@@ -255,59 +343,6 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
                 st.markdown('</div>', unsafe_allow_html=True)
                 st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
             
-            # Enhanced Sentiment Analysis
-            sia = SentimentIntensityAnalyzer()
-            
-            def vader_sentiment(text):
-                if not text:
-                    return "Neutral"
-                score = sia.polarity_scores(text)["compound"]
-                return "Positive" if score >= 0.05 else "Negative" if score <= -0.05 else "Neutral"
-            
-            # Enhanced business-specific sentiment analysis
-            def enhanced_business_sentiment(text):
-                if not text:
-                    return "Neutral"
-                
-                # Get the base VADER scores
-                score = sia.polarity_scores(text)["compound"]
-                
-                # Business-specific sentiment boosters
-                business_positive = [
-                    'recommend', 'excellent', 'amazing', 'love', 'best', 
-                    'friendly', 'helpful', 'clean', 'professional', 'fresh',
-                    'worth', 'perfect', 'fantastic', 'awesome', 'definitely'
-                ]
-                
-                business_negative = [
-                    'waste', 'overpriced', 'rude', 'slow', 'dirty',
-                    'terrible', 'horrible', 'avoid', 'disappointing', 'cold',
-                    'manager', 'complained', 'waiting', 'problem', 'never again'
-                ]
-                
-                # Check for business-specific terms and adjust score
-                text_lower = text.lower()
-                
-                # Apply modest boosts to the compound score for business-specific terms
-                for term in business_positive:
-                    if term in text_lower:
-                        score = min(1.0, score + 0.05)
-                        
-                for term in business_negative:
-                    if term in text_lower:
-                        score = max(-1.0, score - 0.05)
-                
-                # Adjust thresholds for business reviews (they tend to be more polarized)
-                if score >= 0.1:
-                    return "Positive"
-                elif score <= -0.1:
-                    return "Negative"
-                else:
-                    return "Neutral"
-            
-            # Apply enhanced sentiment analysis
-            df["Sentiment"] = df["Cleaned_Review"].apply(enhanced_business_sentiment)
-            
             # Show sentiment distribution
             st.subheader("📊 Sentiment Analysis")
             sentiment_counts = df["Sentiment"].value_counts()
@@ -340,18 +375,48 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
     
     except Exception as e:
         st.error(f"Error in data processing: {str(e)}")
+        st.stop()
     
     # Timeline Analysis - trends over time
     try:
-        if "time" in df.columns and df["time"].notna().any():
-            st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-            st.subheader("📈 Sentiment Timeline")
+        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+        st.subheader("📈 Sentiment Timeline")
+        
+        # Check different possible time column formats
+        time_column = None
+        for possible_column in ["time", "date", "date_time"]:
+            if possible_column in df.columns and df[possible_column].notna().any():
+                time_column = possible_column
+                break
+        
+        if time_column is None:
+            st.info("Timeline analysis not available - review data doesn't include timestamp information")
+        else:
+            # Handle different time formats based on the column type
+            if time_column == "time":
+                # First ensure the column is numeric
+                df["time_numeric"] = pd.to_numeric(df[time_column], errors='coerce')
+                
+                # Check if values look like Unix timestamps (seconds since epoch)
+                if df["time_numeric"].notna().any():
+                    # Check if timestamps are in seconds or milliseconds
+                    # Timestamps in seconds typically have 9-10 digits for recent dates
+                    median_value = df["time_numeric"].median()
+                    
+                    if median_value > 1e11:  # Likely milliseconds (13 digits)
+                        df["date"] = pd.to_datetime(df["time_numeric"], unit='ms', errors='coerce')
+                    else:  # Likely seconds (10 digits)
+                        df["date"] = pd.to_datetime(df["time_numeric"], unit='s', errors='coerce')
             
-            # Convert time values to datetime (SerpAPI returns timestamps)
-            df["date"] = pd.to_datetime(df["time"].astype(float), unit='s', errors='coerce')
-            df = df.dropna(subset=["date"])  # Remove rows with invalid dates
+            elif time_column in ["date", "date_time"]:
+                # Try to parse as datetime directly
+                df["date"] = pd.to_datetime(df[time_column], errors='coerce')
             
-            if len(df) > 0:
+            # Filter out rows with invalid dates
+            df = df.dropna(subset=["date"])
+            
+            if len(df) > 3:  # Ensure we have enough data points for a meaningful timeline
+                # Create month-year column for grouping
                 df["month_year"] = df["date"].dt.strftime('%Y-%m')
                 
                 # Group by month and sentiment
@@ -367,9 +432,9 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
                         pivot_data[sentiment] = 0
                 
                 # Sort by date
-                pivot_data["month_year"] = pd.to_datetime(pivot_data["month_year"], format='%Y-%m')
-                pivot_data = pivot_data.sort_values("month_year")
-                pivot_data["month_year"] = pivot_data["month_year"].dt.strftime('%Y-%m')
+                pivot_data["month_year_date"] = pd.to_datetime(pivot_data["month_year"], format='%Y-%m')
+                pivot_data = pivot_data.sort_values("month_year_date")
+                pivot_data["month_year"] = pivot_data["month_year_date"].dt.strftime('%Y-%m')
                 
                 # Create the timeline visualization with RESIZED dimensions
                 fig, ax = plt.subplots(figsize=FIGURE_SIZES["large"])
@@ -426,11 +491,17 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
                             else:
                                 st.info("Negative reviews remained stable in the latest month")
             else:
-                st.info("Not enough date information for timeline analysis")
-        else:
-            st.info("Timeline analysis not available - review data doesn't include timestamps")
+                st.info("Not enough date information for timeline analysis (fewer than 4 data points)")
     except Exception as e:
         st.warning(f"Error generating timeline: {str(e)}")
+        # Add debug information to help diagnose issues
+        st.markdown("<details><summary>Debug Information</summary>", unsafe_allow_html=True)
+        if "time" in df.columns:
+            st.write("Time column data types:", df["time"].apply(type).value_counts())
+            st.write("Time column sample values:", df["time"].head())
+        else:
+            st.write("Available columns:", df.columns.tolist())
+        st.markdown("</details>", unsafe_allow_html=True)
     
     # Word Clouds - only if we have enough data
     try:
@@ -474,7 +545,6 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
                         st.info("Not enough negative review text for word cloud")
                 else:
                     st.info("No negative reviews found")
-    
     except Exception as e:
         st.warning(f"Error generating word clouds: {str(e)}")
     
@@ -482,32 +552,6 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
     try:
         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
         st.subheader("🔍 Common Words Analysis")
-        
-        def get_top_words(reviews, n=10):
-            if not reviews.any():
-                return []
-                
-            # Combine all review text
-            all_text = " ".join(reviews)
-            
-            # Split into words and count
-            words = re.findall(r'\b\w+\b', all_text.lower())
-            
-            # Simple stopwords filtering
-            stopwords = {'the', 'a', 'an', 'and', 'is', 'in', 'it', 'to', 'was', 'for', 
-                         'of', 'with', 'on', 'at', 'by', 'this', 'that', 'but', 'are', 
-                         'be', 'or', 'have', 'has', 'had', 'not', 'what', 'all', 'were', 
-                         'when', 'where', 'who', 'which', 'their', 'they', 'them', 'there',
-                         'from', 'out', 'some', 'would', 'about', 'been', 'many', 'us', 'we'}
-            
-            # Filter out stopwords and short words
-            filtered_words = [w for w in words if w not in stopwords and len(w) > 2]
-            
-            # Count word frequency
-            word_counts = Counter(filtered_words)
-            
-            # Return top N words
-            return word_counts.most_common(n)
         
         col1, col2 = st.columns(2)
         
@@ -556,11 +600,10 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
                 st.pyplot(fig)
             else:
                 st.info("Not enough data for negative keyword analysis")
-    
     except Exception as e:
         st.warning(f"Error in keyword analysis: {str(e)}")
     
-    # Simple AI Recommendations
+    # Smart Recommendations
     try:
         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
         st.subheader("🤖 Smart Recommendations")
@@ -733,7 +776,6 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
             
             for i, action in enumerate(action_items, 1):
                 st.markdown(f"{i}. {action}")
-            
     except Exception as e:
         st.warning(f"Error generating recommendations: {str(e)}")
     
@@ -742,12 +784,7 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
         st.subheader("📎 Download Your Results")
         
-        # Create download button for dataframe
-        @st.cache_data
-        def convert_df_to_csv(df):
-            return df.to_csv(index=False).encode('utf-8')
-        
-        if st.session_state.reviews_df is not None:
+        if "reviews_df" in st.session_state and st.session_state.reviews_df is not None:
             csv = convert_df_to_csv(df)
             st.download_button(
                 label="📥 Download Reviews CSV",
