@@ -10,9 +10,6 @@ import matplotlib.pyplot as plt
 from wordcloud import WordCloud
 import base64
 from collections import Counter
-# Add imports for language detection and translation
-from langdetect import detect
-from googletrans import Translator
 
 # Page configuration MUST be the first Streamlit command
 st.set_page_config(page_title="VibeChek AI Dashboard", layout="wide")
@@ -54,49 +51,14 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Initialize translator once
-translator = Translator()
-
 # Helper functions
-def detect_and_translate(text):
-    """
-    Detect if text is in Swahili and translate to English if needed.
-    Returns the translated text and whether translation occurred.
-    """
-    if not isinstance(text, str) or not text.strip():
-        return "", False
-    
-    try:
-        # Detect language
-        detected_lang = detect(text)
-        
-        # If Swahili is detected (language code 'sw'), translate to English
-        if detected_lang == 'sw':
-            translation = translator.translate(text, src='sw', dest='en')
-            return translation.text, True
-        else:
-            # Return original text if not Swahili
-            return text, False
-    except Exception as e:
-        # If any error occurs during detection/translation, return original
-        print(f"Translation error: {str(e)}")
-        return text, False
-
-def clean_text(text, translate=True):
-    """Clean text by removing URLs, special characters, and converting to lowercase.
-    Also translates from Swahili to English if detected."""
+def clean_text(text):
+    """Clean text by removing URLs, special characters, and converting to lowercase"""
     if not isinstance(text, str):
-        return "", False
-    
-    # First perform translation if needed
-    was_translated = False
-    if translate:
-        text, was_translated = detect_and_translate(text)
-    
-    # Then perform regular text cleaning
+        return ""
     text = re.sub(r"http\S+", "", text)
     text = re.sub(r"[^a-zA-Z0-9\s]", " ", text)
-    return text.strip().lower(), was_translated
+    return text.strip().lower()
 
 def vader_sentiment(text):
     """Basic VADER sentiment analysis"""
@@ -215,11 +177,6 @@ place_id = st.text_input("📍 Enter Google Place ID")
 # Max Reviews
 max_reviews = st.slider("🔄 How many reviews to fetch?", min_value=50, max_value=500, step=50, value=150)
 
-# Add language support options
-st.markdown("### 🌐 Language Support")
-enable_translation = st.checkbox("Enable Swahili detection and translation", value=True, 
-                              help="When enabled, Swahili reviews will be automatically detected and translated to English")
-
 if st.button("🚀 Fetch & Analyze Reviews") and place_id:
     try:
         with st.spinner("Fetching reviews from Google Maps..."):
@@ -308,25 +265,8 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
     # Process the data
     try:
         with st.spinner("Processing reviews..."):
-            # Add new column to track translations
-            df["Was_Translated"] = False
-            
-            # Clean and translate reviews if option is enabled
-            if enable_translation:
-                # Apply translation and cleaning
-                cleaned_results = df["snippet"].apply(lambda x: clean_text(x, translate=True))
-                
-                # Split the results into separate columns
-                df["Cleaned_Review"] = cleaned_results.apply(lambda x: x[0])
-                df["Was_Translated"] = cleaned_results.apply(lambda x: x[1])
-                
-                # Display translation stats if any were translated
-                if df["Was_Translated"].any():
-                    num_translated = df["Was_Translated"].sum()
-                    st.info(f"🌐 {num_translated} reviews were automatically translated from Swahili to English for analysis.")
-            else:
-                # Just clean without translation
-                df["Cleaned_Review"] = df["snippet"].apply(lambda x: clean_text(x, translate=False)[0])
+            # Clean reviews
+            df["Cleaned_Review"] = df["snippet"].apply(clean_text)
             
             # Apply enhanced sentiment analysis
             df["Sentiment"] = df["Cleaned_Review"].apply(enhanced_business_sentiment)
@@ -443,20 +383,13 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
             # Show the data
             st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
             st.subheader("📋 Review Data")
-            
-            # Update dataframe display to indicate translations
-            if enable_translation and df["Was_Translated"].any():
-                # Show both original and translated text for reviews that were translated
-                display_cols = ["snippet", "Cleaned_Review", "Was_Translated", "Sentiment"]
-                display_df = df[display_cols].head(10)
-                st.dataframe(display_df)
-                st.caption("✓ in 'Was_Translated' indicates reviews that were automatically translated from Swahili")
-            else:
-                st.dataframe(df[["snippet", "Sentiment"]].head(10))
+            st.dataframe(df[["snippet", "Sentiment"]].head(10))
     
     except Exception as e:
         st.error(f"Error in data processing: {str(e)}")
         st.stop()
+    
+    
     
     # Word Clouds - only if we have enough data
     try:
@@ -687,13 +620,6 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
             top_neg_words = [word for word, count in neg_words]
             negative_insights.append(f"Customers often mention '{', '.join(top_neg_words)}' negatively. Address these areas for improvement.")
         
-        # Add specific insight for translated reviews if relevant
-        if enable_translation and df["Was_Translated"].any():
-            num_translated = df["Was_Translated"].sum()
-            pct_translated = (num_translated / len(df)) * 100
-            if pct_translated > 10:  # If more than 10% were in Swahili
-                positive_insights.append("You have a significant number of Swahili-speaking customers. Consider adding Swahili language support to your business.")
-        
         # Display recommendations
         col1, col2 = st.columns(2)
         
@@ -736,10 +662,6 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
                 "Train staff on common customer pain points identified in the analysis"
             ])
             
-            # Add language-specific action item if relevant
-            if enable_translation and df["Was_Translated"].any():
-                action_items.append("Consider adding Swahili language support for customer communications and signage")
-            
             for i, action in enumerate(action_items, 1):
                 st.markdown(f"{i}. {action}")
     except Exception as e:
@@ -777,5 +699,4 @@ else:
         - ☁️ **Word Clouds**: Visualize common words in positive and negative reviews
         - 📊 **Sentiment Analysis**: AI-powered sentiment detection using VADER
         - 💡 **Smart Recommendations**: Get actionable business advice based on customer feedback
-        - 🌐 **Multilingual Support**: Automatically detects and translates Swahili reviews
         """)
