@@ -3,13 +3,36 @@ import streamlit as st
 import pandas as pd
 import re
 import time
-from serpapi import GoogleSearch  # Correct import
+import numpy as np
+from serpapi import GoogleSearch
 import nltk
 from nltk.sentiment import SentimentIntensityAnalyzer
 import matplotlib.pyplot as plt
 from wordcloud import WordCloud
 import base64
 from collections import Counter
+from nltk.util import ngrams
+from nltk.tokenize import word_tokenize, sent_tokenize
+from nltk.corpus import stopwords
+import gensim
+from gensim import corpora
+from gensim.models import LdaModel
+from googletrans import Translator
+import spacy
+import plotly.express as px
+import seaborn as sns
+from textblob import TextBlob
+from sklearn.feature_extraction.text import CountVectorizer
+
+# Download necessary NLTK data at startup
+try:
+    nltk.data.find('vader_lexicon')
+    nltk.data.find('punkt')
+    nltk.data.find('stopwords')
+except LookupError:
+    nltk.download("vader_lexicon", quiet=True)
+    nltk.download("punkt", quiet=True)
+    nltk.download("stopwords", quiet=True)
 
 # Page configuration MUST be the first Streamlit command
 st.set_page_config(page_title="VibeChek AI Dashboard", layout="wide")
@@ -48,8 +71,38 @@ st.markdown("""
         display: block !important;
         margin: 0 auto !important;
     }
+    /* Style for semantic insights */
+    .insight-card {
+        background-color: #f8f9fa;
+        border-radius: 5px;
+        padding: 15px;
+        margin-bottom: 10px;
+        border-left: 4px solid #4e8df5;
+    }
+    .topic-card {
+        background-color: #f0f7ff;
+        border-radius: 5px;
+        padding: 15px;
+        margin-bottom: 10px;
+        border-left: 4px solid #3366cc;
+    }
+    .phrase-header {
+        font-weight: bold;
+        color: #333;
+    }
+    .phrase-count {
+        color: #666;
+        font-size: 0.9em;
+    }
+    .phrase-sentiment {
+        font-style: italic;
+        font-size: 0.9em;
+    }
 </style>
 """, unsafe_allow_html=True)
+
+# Initialize sentiment analyzer
+sia = SentimentIntensityAnalyzer()
 
 # Helper functions
 def clean_text(text):
@@ -135,19 +188,169 @@ def get_top_words(reviews, n=10):
     # Return top N words
     return word_counts.most_common(n)
 
+# NEW FUNCTIONS FOR SEMANTIC ANALYSIS
+
+def translate_text(text, target_language='en'):
+    """Translate text to target language (default is English)"""
+    if not text or not isinstance(text, str):
+        return ""
+    
+    try:
+        translator = Translator()
+        translated = translator.translate(text, dest=target_language)
+        return translated.text
+    except Exception as e:
+        st.warning(f"Translation error: {str(e)}")
+        return text  # Return original text if translation fails
+
+def detect_language(text):
+    """Detect the language of the text"""
+    if not text or not isinstance(text, str):
+        return "en"  # Default to English
+    
+    try:
+        translator = Translator()
+        detected = translator.detect(text)
+        return detected.lang
+    except:
+        return "en"  # Default to English if detection fails
+
+def extract_ngrams(text, min_n=2, max_n=4, top_n=15):
+    """Extract most common n-grams (phrases) from text"""
+    if not text or not isinstance(text, str):
+        return []
+    
+    # Tokenize and clean
+    tokens = word_tokenize(text.lower())
+    stop_words = set(stopwords.words('english'))
+    filtered_tokens = [token for token in tokens if token.isalpha() and token not in stop_words and len(token) > 2]
+    
+    # Get n-grams from min_n to max_n
+    all_ngrams = []
+    for n in range(min_n, max_n + 1):
+        n_grams = list(ngrams(filtered_tokens, n))
+        all_ngrams.extend([' '.join(g) for g in n_grams])
+    
+    # Count and return top n-grams
+    ngram_counts = Counter(all_ngrams)
+    return ngram_counts.most_common(top_n)
+
+def perform_topic_modeling(texts, num_topics=5, num_words=8):
+    """Perform LDA topic modeling on reviews"""
+    if not texts or len(texts) < 5:
+        return None, None
+    
+    # Preprocess texts
+    tokenized_texts = []
+    for text in texts:
+        if not isinstance(text, str) or not text:
+            continue
+        
+        # Tokenize and filter
+        tokens = word_tokenize(text.lower())
+        stop_words = set(stopwords.words('english'))
+        filtered_tokens = [token for token in tokens if token.isalpha() and token not in stop_words and len(token) > 2]
+        
+        if filtered_tokens:
+            tokenized_texts.append(filtered_tokens)
+    
+    if not tokenized_texts:
+        return None, None
+    
+    # Create dictionary and corpus
+    dictionary = corpora.Dictionary(tokenized_texts)
+    corpus = [dictionary.doc2bow(text) for text in tokenized_texts]
+    
+    # Build LDA model
+    lda_model = LdaModel(
+        corpus=corpus,
+        id2word=dictionary,
+        num_topics=num_topics,
+        passes=10,
+        alpha='auto',
+        per_word_topics=True
+    )
+    
+    return lda_model, dictionary
+
+def get_sentiment_for_phrase(phrase, reviews_df):
+    """Calculate sentiment score for a specific phrase"""
+    # Find reviews containing the phrase
+    matching_reviews = reviews_df[reviews_df['Cleaned_Review'].str.contains(phrase, na=False)]
+    
+    if len(matching_reviews) == 0:
+        return 0  # Neutral if no matches
+    
+    # Get average sentiment
+    sentiment_counts = matching_reviews['Sentiment'].value_counts()
+    positive_count = sentiment_counts.get('Positive', 0)
+    negative_count = sentiment_counts.get('Negative', 0)
+    neutral_count = sentiment_counts.get('Neutral', 0)
+    
+    # Calculate sentiment ratio (-1 to +1)
+    total = positive_count + negative_count + neutral_count
+    if total == 0:
+        return 0
+    
+    sentiment_score = (positive_count - negative_count) / total
+    return sentiment_score
+
+def extract_common_contexts(phrase, reviews, max_examples=3):
+    """Extract common contexts where a phrase appears"""
+    contexts = []
+    
+    for review in reviews:
+        if not isinstance(review, str) or not review:
+            continue
+            
+        if phrase.lower() in review.lower():
+            sentences = sent_tokenize(review)
+            for sentence in sentences:
+                if phrase.lower() in sentence.lower():
+                    contexts.append(sentence)
+                    if len(contexts) >= max_examples:
+                        return contexts
+    
+    return contexts
+
+def get_phrase_frequency_data(reviews_df, sentiment_filter=None):
+    """Get phrase frequency data with sentiment breakdown"""
+    if sentiment_filter:
+        filtered_df = reviews_df[reviews_df['Sentiment'] == sentiment_filter]
+    else:
+        filtered_df = reviews_df
+    
+    if len(filtered_df) == 0:
+        return []
+    
+    all_text = " ".join(filtered_df['Cleaned_Review'].dropna())
+    
+    # Extract 2-4 word phrases
+    phrases = extract_ngrams(all_text, min_n=2, max_n=4, top_n=20)
+    
+    # Add sentiment information for each phrase
+    phrase_data = []
+    for phrase, count in phrases:
+        sentiment_score = get_sentiment_for_phrase(phrase, reviews_df)
+        sentiment_label = "Positive" if sentiment_score > 0.2 else "Negative" if sentiment_score < -0.2 else "Neutral"
+        
+        # Get example contexts
+        contexts = extract_common_contexts(phrase, reviews_df['Cleaned_Review'].dropna(), max_examples=2)
+        
+        phrase_data.append({
+            'phrase': phrase,
+            'count': count,
+            'sentiment_score': sentiment_score,
+            'sentiment_label': sentiment_label,
+            'contexts': contexts
+        })
+    
+    return phrase_data
+
 @st.cache_data
 def convert_df_to_csv(df):
     """Convert dataframe to CSV for download"""
     return df.to_csv(index=False).encode('utf-8')
-
-# Download NLTK data at startup
-try:
-    nltk.data.find('vader_lexicon')
-except LookupError:
-    nltk.download("vader_lexicon", quiet=True)
-
-# Initialize sentiment analyzer
-sia = SentimentIntensityAnalyzer()
 
 # App title and description
 st.title("🧠 VibeChek: Google Review Analyzer")
@@ -173,6 +376,10 @@ if "reviews_df" not in st.session_state:
 
 # Input Place ID
 place_id = st.text_input("📍 Enter Google Place ID")
+
+# Language options
+languages = ["auto", "en", "sw", "fr", "es", "de", "zh-cn", "ar", "ru", "pt", "ja"]
+source_language = st.selectbox("Source Language", languages, index=0)
 
 # Max Reviews
 max_reviews = st.slider("🔄 How many reviews to fetch?", min_value=50, max_value=500, step=50, value=150)
@@ -265,8 +472,26 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
     # Process the data
     try:
         with st.spinner("Processing reviews..."):
-            # Clean reviews
-            df["Cleaned_Review"] = df["snippet"].apply(clean_text)
+            # Handle translation if needed
+            if source_language != "en" and source_language != "auto":
+                st.info("Translating reviews... this may take a moment")
+                df['Translated_Review'] = df['snippet'].apply(lambda x: translate_text(x) if x else "")
+                df["Cleaned_Review"] = df['Translated_Review'].apply(clean_text)
+            elif source_language == "auto":
+                # Auto-detect and translate non-English reviews
+                df['Detected_Language'] = df['snippet'].apply(lambda x: detect_language(x) if x else "en")
+                
+                # Translate non-English reviews
+                df['Translated_Review'] = df.apply(
+                    lambda row: translate_text(row['snippet']) 
+                    if row['Detected_Language'] != 'en' and row['snippet'] 
+                    else row['snippet'], axis=1
+                )
+                
+                df["Cleaned_Review"] = df['Translated_Review'].apply(clean_text)
+            else:
+                # Just clean English reviews
+                df["Cleaned_Review"] = df["snippet"].apply(clean_text)
             
             # Apply enhanced sentiment analysis
             df["Sentiment"] = df["Cleaned_Review"].apply(enhanced_business_sentiment)
@@ -383,13 +608,18 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
             # Show the data
             st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
             st.subheader("📋 Review Data")
-            st.dataframe(df[["snippet", "Sentiment"]].head(10))
+            
+            # Show translation data if applicable
+            if 'Translated_Review' in df.columns:
+                display_cols = ["snippet", "Translated_Review", "Sentiment"]
+            else:
+                display_cols = ["snippet", "Sentiment"]
+                
+            st.dataframe(df[display_cols].head(10))
     
     except Exception as e:
         st.error(f"Error in data processing: {str(e)}")
         st.stop()
-    
-    
     
     # Word Clouds - only if we have enough data
     try:
@@ -491,181 +721,587 @@ if st.button("🚀 Fetch & Analyze Reviews") and place_id:
     except Exception as e:
         st.warning(f"Error in keyword analysis: {str(e)}")
     
-    # Smart Recommendations
+    # NEW SECTION: Smart Phrase Analysis
     try:
         st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-        st.subheader("🤖 Smart Recommendations")
+        st.subheader("🧩 Smart Phrase Analysis")
+        st.markdown("Common phrases used by customers, ranked by frequency and sentiment")
         
-        # Define common business issues and solutions based on keywords
-        business_insights = {
-            "service": {
-                "positive": "Your service is praised by customers. Continue training staff on excellent customer service techniques.",
-                "negative": "Service issues appear in negative reviews. Consider staff training or reviewing service protocols."
-            },
-            "price": {
-                "positive": "Customers find your pricing reasonable and fair. Maintain this pricing strategy.",
-                "negative": "Price concerns appear in negative reviews. Consider reviewing your pricing strategy or better communicating value."
-            },
-            "quality": {
-                "positive": "Product/service quality is appreciated. Maintain your quality standards.",
-                "negative": "Quality concerns appear in reviews. Review quality control processes."
-            },
-            "wait": {
-                "positive": "Customers appreciate your efficient timing/waiting periods.",
-                "negative": "Wait times appear to be an issue. Consider operational efficiency improvements."
-            },
-            "clean": {
-                "positive": "Cleanliness is noted positively. Maintain your cleanliness standards.",
-                "negative": "Cleanliness concerns appear in reviews. Review cleaning protocols."
-            },
-            "staff": {
-                "positive": "Your staff receives positive mentions. Recognize and reward good employees.",
-                "negative": "Staff-related concerns appear in reviews. Consider additional training or reviewing hiring practices."
-            },
-            "location": {
-                "positive": "Your location is mentioned positively. Highlight this in marketing materials.",
-                "negative": "Location issues appear in reviews. Consider improving signage, access, or parking if possible."
-            },
-            "food": {
-                "positive": "Food quality is praised. Maintain your food preparation standards.",
-                "negative": "Food quality issues appear in reviews. Review kitchen operations and quality control."
-            },
-            "atmosphere": {
-                "positive": "Customers enjoy your atmosphere/ambiance. Maintain this environment.",
-                "negative": "Atmosphere concerns appear in reviews. Consider refreshing your space's design or ambiance."
-            },
-            "parking": {
-                "positive": "Parking is mentioned positively. Continue to maintain good parking options.",
-                "negative": "Parking issues appear in reviews. Consider improving parking options or providing clearer instructions."
-            },
-            "menu": {
-                "positive": "Your menu receives positive attention. Continue with your current menu strategy.",
-                "negative": "Menu concerns appear in reviews. Consider updating options or improving descriptions."
-            },
-            "value": {
-                "positive": "Customers find good value in your offerings. Maintain this balance of price and quality.",
-                "negative": "Value concerns appear in reviews. Review pricing or improve quality to increase perceived value."
-            },
-            "friendly": {
-                "positive": "Friendliness is mentioned positively. Continue encouraging friendly customer interactions.",
-                "negative": "Consider emphasizing a more friendly approach to customer service."
-            },
-            "recommend": {
-                "positive": "Customers are recommending your business - excellent! Consider a referral program.",
-                "negative": "Work on issues that prevent customers from recommending your business."
-            },
-            "management": {
-                "positive": "Management is mentioned positively. Maintain these management practices.",
-                "negative": "Management concerns appear in reviews. Consider reviewing management training or approaches."
-            },
-            "reservation": {
-                "positive": "Your reservation system works well for customers.",
-                "negative": "Reservation issues appear in reviews. Review your reservation system or processes."
-            },
-            "bathroom": {
-                "positive": "Restrooms are mentioned positively. Maintain cleanliness standards.",
-                "negative": "Bathroom concerns appear in reviews. Improve cleaning frequency or facilities."
-            },
-            "noisy": {
-                "positive": "Customers appreciate the sound levels in your establishment.",
-                "negative": "Noise issues appear in reviews. Consider acoustic improvements or music volume adjustments."
-            },
-            "portion": {
-                "positive": "Portion sizes are mentioned positively. Maintain current portion standards.",
-                "negative": "Portion size concerns appear in reviews. Review your portion sizing strategy."
-            },
-            "delivery": {
-                "positive": "Delivery service is praised by customers. Maintain delivery standards.",
-                "negative": "Delivery issues appear in reviews. Review delivery processes and timing."
-            },
-            "return": {
-                "positive": "Customers mention returning to your business - excellent repeat business!",
-                "negative": "Consider addressing issues that prevent customers from returning."
-            }
-        }
+        # Get phrase data
+        phrase_data = get_phrase_frequency_data(df)
         
-        # Check for keywords in positive and negative reviews
-        positive_insights = []
-        negative_insights = []
-        
-        positive_text = " ".join(df[df["Sentiment"] == "Positive"]["Cleaned_Review"]).lower()
-        negative_text = " ".join(df[df["Sentiment"] == "Negative"]["Cleaned_Review"]).lower()
-        
-        for keyword, insights in business_insights.items():
-            if keyword in positive_text:
-                positive_insights.append(insights["positive"])
-            if keyword in negative_text:
-                negative_insights.append(insights["negative"])
-        
-        # Add insights based on overall sentiment
-        if len(df) > 0:
-            sentiment_counts = df["Sentiment"].value_counts()
-            positive_pct = sentiment_counts.get("Positive", 0) / len(df) * 100 if len(df) > 0 else 0
-            negative_pct = sentiment_counts.get("Negative", 0) / len(df) * 100 if len(df) > 0 else 0
+        if phrase_data:
+            # Create tabs for positive, negative, and all phrases
+            pos_phrases = [p for p in phrase_data if p['sentiment_label'] == 'Positive']
+            neg_phrases = [p for p in phrase_data if p['sentiment_label'] == 'Negative']
             
-            if positive_pct > 75:
-                positive_insights.append("Overall sentiment is very positive. Consider using positive reviews in marketing materials.")
-            elif positive_pct < 50:
-                negative_insights.append("Overall sentiment is concerning. Consider a comprehensive review of business operations.")
-        
-        # Add insights based on most common words
-        pos_words = get_top_words(df[df["Sentiment"] == "Positive"]["Cleaned_Review"], 5)
-        neg_words = get_top_words(df[df["Sentiment"] == "Negative"]["Cleaned_Review"], 5)
-        
-        if pos_words:
-            top_pos_words = [word for word, count in pos_words]
-            positive_insights.append(f"Customers often mention '{', '.join(top_pos_words)}' positively. Emphasize these aspects in marketing.")
+            tabs = st.tabs(["All Phrases", "Positive Phrases", "Negative Phrases"])
             
-        if neg_words:
-            top_neg_words = [word for word, count in neg_words]
-            negative_insights.append(f"Customers often mention '{', '.join(top_neg_words)}' negatively. Address these areas for improvement.")
-        
-        # Display recommendations
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown("### 🟢 Strengths to Maintain")
-            if positive_insights:
-                for i, insight in enumerate(positive_insights[:5], 1):  # Limit to top 5
-                    st.markdown(f"{i}. {insight}")
-            else:
-                st.info("Not enough data to generate strength recommendations")
-        
-        with col2:
-            st.markdown("### 🔴 Areas for Improvement")
-            if negative_insights:
-                for i, insight in enumerate(negative_insights[:5], 1):  # Limit to top 5
-                    st.markdown(f"{i}. {insight}")
-            else:
-                st.info("Not enough data to generate improvement recommendations")
+            with tabs[0]:
+                col1, col2 = st.columns(2)
                 
-        # Add a section for actionable next steps
-        if positive_insights or negative_insights:
-            st.markdown('<div class="subsection-divider"></div>', unsafe_allow_html=True)
-            st.markdown("### 📝 Actionable Next Steps")
-            
-            action_items = []
-            
-            if negative_insights:
-                # Prioritize addressing top negative issues
-                action_items.append("Address the top negative themes in customer reviews with specific improvement plans")
+                with col1:
+                    # Visualization of top phrases
+                    top_phrases = phrase_data[:10]
+                    phrases_df = pd.DataFrame({
+                        'Phrase': [p['phrase'] for p in top_phrases],
+                        'Count': [p['count'] for p in top_phrases],
+                        'Sentiment': [p['sentiment_label'] for p in top_phrases]
+                    })
+                    
+                    # Create horizontal bar chart with colored bars based on sentiment
+                    fig, ax = plt.subplots(figsize=FIGURE_SIZES["medium"])
+                    colors = ['green' if s == 'Positive' else 'red' if s == 'Negative' else 'gray' 
+                             for s in phrases_df['Sentiment']]
+                    
+                    bars = ax.barh(phrases_df['Phrase'][::-1], phrases_df['Count'][::-1], color=colors)
+                    
+                    # Add count values
+                    for bar in bars:
+                        width = bar.get_width()
+                        ax.text(width + 0.3, bar.get_y() + bar.get_height()/2, 
+                                str(int(width)), va='center', fontsize=7)
+                    
+                    ax.set_title("Top Phrases in Reviews", fontsize=10)
+                    ax.tick_params(axis='both', which='major', labelsize=8)
+                    plt.tight_layout()
+                    st.pyplot(fig)
                 
-            if positive_insights:
-                # Leverage strengths
-                action_items.append("Highlight positive aspects in marketing materials and train staff to emphasize these strengths")
+                with col2:
+                    # Sentiment distribution of top phrases
+                    sentiment_distribution = pd.Series([p['sentiment_label'] for p in phrase_data]).value_counts()
+                    
+                    # Create pie chart
+                    fig, ax = plt.subplots(figsize=FIGURE_SIZES["pie"])
+                    colors = {'Positive': 'green', 'Neutral': 'gray', 'Negative': 'red'}
+                    wedges, texts, autotexts = ax.pie(
+                        sentiment_distribution, 
+                        labels=sentiment_distribution.index, 
+                        autopct='%1.1f%%',
+                        colors=[colors.get(x, 'blue') for x in sentiment_distribution.index],
+                        textprops={'fontsize': 8}
+                    )
+                    for autotext in autotexts:
+                        autotext.set_fontsize(8)
+                    
+                    ax.set_title("Phrase Sentiment Distribution", fontsize=10)
+                    plt.tight_layout()
+                    st.pyplot(fig)
+                
+                # Display phrases with their contexts
+                st.markdown("### Top Phrases and Examples")
+                for i, phrase_info in enumerate(phrase_data[:10], 1):
+                    sentiment_color = "green" if phrase_info['sentiment_label'] == 'Positive' else "red" if phrase_info['sentiment_label'] == 'Negative' else "gray"
+                    
+                    st.markdown(f"""
+                    <div class="insight-card">
+                        <span class="phrase-header">"{phrase_info['phrase']}"</span> 
+                        <span class="phrase-count">({phrase_info['count']} occurrences)</span>
+                        <div class="phrase-sentiment" style="color:{sentiment_color}">Sentiment: {phrase_info['sentiment_label']}</div>
+                        <div style="margin-top:8px;"><strong>Example contexts:</strong></div>
+                        {"<ul>" + "".join([f"<li><em>'{context}'</em></li>" for context in phrase_info['contexts']]) + "</ul>" if phrase_info['contexts'] else "<div>No example contexts found</div>"}
+                    </div>
+                    """, unsafe_allow_html=True)
             
-            # Add general best practices
-            action_items.extend([
-                "Respond to negative reviews promptly and professionally",
-                "Track sentiment trends monthly to measure improvement",
-                "Implement a customer feedback system to catch issues before they result in negative reviews",
-                "Train staff on common customer pain points identified in the analysis"
-            ])
+            with tabs[1]:
+                if pos_phrases:
+                    st.markdown("### Positive Phrases")
+                    for i, phrase_info in enumerate(pos_phrases[:10], 1):
+                        st.markdown(f"""
+                        <div class="insight-card" style="border-left: 4px solid green;">
+                            <span class="phrase-header">"{phrase_info['phrase']}"</span> 
+                            <span class="phrase-count">({phrase_info['count']} occurrences)</span>
+                            <div style="margin-top:8px;"><strong>Example contexts:</strong></div>
+                            {"<ul>" + "".join([f"<li><em>'{context}'</em></li>" for context in phrase_info['contexts']]) + "</ul>" if phrase_info['contexts'] else "<div>No example contexts found</div>"}
+                        </div>
+                        """, unsafe_allow_html=True)
+                else:
+                    st.info("No positive phrases identified")
             
-            for i, action in enumerate(action_items, 1):
-                st.markdown(f"{i}. {action}")
+            with tabs[2]:
+                if neg_phrases:
+                    st.markdown("### Negative Phrases")
+                    for i, phrase_info in enumerate(neg_phrases[:10], 1):
+                        st.markdown(f"""
+                        <div class="insight-card" style="border-left: 4px solid red;">
+                            <span class="phrase-header">"{phrase_info['phrase']}"</span> 
+                            <span class="phrase-count">({phrase_info['count']} occurrences)</span>
+                            <div style="margin-top:8px;"><strong>Example contexts:</strong></div>
+                            {"<ul>" + "".join([f"<li><em>'{context}'</em></li>" for context in phrase_info['contexts']]) + "</ul>" if phrase_info['contexts'] else "<div>No example contexts found</div>"}
+                        </div>
+                        """, unsafe_allow_html=True)
+                else:
+                    st.info("No negative phrases identified")
+        else:
+            st.info("Not enough review data for phrase analysis")
+
     except Exception as e:
-        st.warning(f"Error generating recommendations: {str(e)}")
+        st.warning(f"Error in phrase analysis: {str(e)}")
+    
+    # NEW SECTION: Topic Modeling
+    try:
+        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+        st.subheader("📚 Topic Modeling Analysis")
+        st.markdown("Discovering key themes in reviews using LDA (Latent Dirichlet Allocation)")
+        
+        # Perform topic modeling
+        lda_model, dictionary = perform_topic_modeling(df['Cleaned_Review'].dropna().tolist())
+        
+        if lda_model and dictionary:
+            # Number of topics to display
+            num_topics = min(5, lda_model.num_topics)
+            
+            # Visualize topics
+            topics_df = pd.DataFrame()
+            
+            for topic_id in range(num_topics):
+                # Get the top words for this topic
+                words = [word for word, prob in lda_model.show_topic(topic_id, topn=8)]
+                probs = [prob for word, prob in lda_model.show_topic(topic_id, topn=8)]
+                
+                # Add to the dataframe
+                topic_df = pd.DataFrame({
+                    'word': words,
+                    'probability': probs,
+                    'topic': f'Topic {topic_id+1}'
+                })
+                topics_df = pd.concat([topics_df, topic_df])
+            
+            # Create horizontal bar chart
+            fig = px.bar(
+                topics_df, 
+                x='probability', 
+                y='word', 
+                color='topic', 
+                facet_col='topic',
+                facet_col_wrap=1,  # Stack topics vertically
+                height=min(100 * num_topics, 600),
+                width=700,
+                orientation='h',
+                labels={'probability': 'Probability', 'word': 'Word'},
+                title='Top Words in Each Topic'
+            )
+            
+            fig.update_layout(showlegend=False)
+            st.plotly_chart(fig)
+            
+            # Topic interpretation - manual interpretation of discovered topics
+            st.markdown("### Topic Interpretations")
+            
+            # Initialize topic interpretations (in a real app, these would be dynamically generated)
+            topic_interpretations = []
+            
+            for topic_id in range(num_topics):
+                # Get words for this topic
+                topic_words = [word for word, _ in lda_model.show_topic(topic_id, topn=8)]
+                topic_word_str = ", ".join(topic_words)
+                
+                # Simple heuristic interpretations based on words
+                if any(word in topic_words for word in ['service', 'staff', 'friendly', 'helpful']):
+                    interpretation = "Customer Service Experience"
+                elif any(word in topic_words for word in ['food', 'delicious', 'taste', 'menu', 'dish']):
+                    interpretation = "Food Quality and Menu Options"
+                elif any(word in topic_words for word in ['clean', 'bathroom', 'cleanliness', 'dirty']):
+                    interpretation = "Cleanliness and Hygiene"
+                elif any(word in topic_words for word in ['price', 'expensive', 'value', 'worth']):
+                    interpretation = "Pricing and Value"
+                elif any(word in topic_words for word in ['wait', 'time', 'long', 'slow', 'quick']):
+                    interpretation = "Wait Times and Efficiency"
+                elif any(word in topic_words for word in ['atmosphere', 'ambiance', 'comfortable', 'environment']):
+                    interpretation = "Atmosphere and Ambiance"
+                elif any(word in topic_words for word in ['reservation', 'booking', 'table', 'full']):
+                    interpretation = "Reservations and Availability"
+                elif any(word in topic_words for word in ['delivery', 'order', 'online', 'pickup']):
+                    interpretation = "Delivery and Online Ordering"
+                else:
+                    interpretation = f"Topic {topic_id+1}"
+                
+                topic_interpretations.append({
+                    'topic_id': topic_id,
+                    'words': topic_words,
+                    'interpretation': interpretation
+                })
+            
+            # Display interpretations
+            for topic in topic_interpretations:
+                st.markdown(f"""
+                <div class="topic-card">
+                    <h4>{topic['interpretation']}</h4>
+                    <p><strong>Key words:</strong> {', '.join(topic['words'])}</p>
+                    <p><em>This topic appears to focus on aspects related to {topic['interpretation'].lower()}</em></p>
+                </div>
+                """, unsafe_allow_html=True)
+        else:
+            st.info("Not enough review data for reliable topic modeling")
+    
+    except Exception as e:
+        st.warning(f"Error in topic modeling: {str(e)}")
+
+    # Truly Smart AI-Powered Recommendations
+    try:
+        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+        st.subheader("🧠 AI-Powered Insights & Recommendations")
+        
+        # Add new function for AI-powered recommendations
+        def generate_ai_recommendations(df, phrase_data=None, topic_data=None):
+            """
+            Generate AI-powered recommendations based on comprehensive review analysis
+            """
+            if len(df) < 5:
+                return {
+                    "strengths": ["Not enough review data to generate AI insights"],
+                    "improvements": ["Not enough review data to generate AI insights"],
+                    "actions": ["Collect more customer reviews to enable in-depth analysis"]
+                }
+                
+            # 1. Analyze sentiment distribution and trends
+            sentiment_counts = df["Sentiment"].value_counts()
+            total_reviews = len(df)
+            positive_pct = sentiment_counts.get("Positive", 0) / total_reviews * 100
+            negative_pct = sentiment_counts.get("Negative", 0) / total_reviews * 100
+            neutral_pct = sentiment_counts.get("Neutral", 0) / total_reviews * 100
+            
+            # Calculate average rating if available
+            avg_rating = None
+            if "rating_num" in df.columns and df["rating_num"].notna().any():
+                avg_rating = df["rating_num"].mean()
+            
+            # 2. Extract sentiment-specific review content
+            positive_reviews = df[df["Sentiment"] == "Positive"]["Cleaned_Review"].dropna().tolist()
+            negative_reviews = df[df["Sentiment"] == "Negative"]["Cleaned_Review"].dropna().tolist()
+            
+            # 3. Find co-occurring topics in negative reviews
+            negative_phrases = []
+            if phrase_data:
+                negative_phrases = [p['phrase'] for p in phrase_data if p['sentiment_label'] == 'Negative']
+            
+            # 4. Extract themes using NLP
+            from sklearn.feature_extraction.text import CountVectorizer
+            from sklearn.decomposition import LatentDirichletAllocation
+            
+            # Prepare for advanced analysis
+            all_reviews = df["Cleaned_Review"].dropna().tolist()
+            
+            # Use TF-IDF to find important terms
+            try:
+                from sklearn.feature_extraction.text import TfidfVectorizer
+                tfidf = TfidfVectorizer(
+                    max_features=100, 
+                    stop_words='english', 
+                    ngram_range=(1, 3),
+                    min_df=2
+                )
+                tfidf_matrix = tfidf.fit_transform(all_reviews)
+                terms = tfidf.get_feature_names_out()
+                
+                # Get most important terms by TF-IDF score
+                from scipy.sparse import csr_matrix
+                tfidf_sums = tfidf_matrix.sum(axis=0)
+                tfidf_scores = [(term, tfidf_sums[0, idx]) for idx, term in enumerate(terms)]
+                top_terms = sorted(tfidf_scores, key=lambda x: x[1], reverse=True)[:20]
+                
+                # Split by sentiment
+                pos_tfidf = tfidf.transform(positive_reviews) if positive_reviews else None
+                neg_tfidf = tfidf.transform(negative_reviews) if negative_reviews else None
+                
+                # Get sentiment-specific important terms
+                pos_terms = []
+                neg_terms = []
+                
+                if pos_tfidf is not None and pos_tfidf.shape[0] > 0:
+                    pos_sums = pos_tfidf.sum(axis=0)
+                    pos_scores = [(term, pos_sums[0, idx]) for idx, term in enumerate(terms)]
+                    pos_terms = sorted(pos_scores, key=lambda x: x[1], reverse=True)[:10]
+                
+                if neg_tfidf is not None and neg_tfidf.shape[0] > 0:
+                    neg_sums = neg_tfidf.sum(axis=0)
+                    neg_scores = [(term, neg_sums[0, idx]) for idx, term in enumerate(terms)]
+                    neg_terms = sorted(neg_scores, key=lambda x: x[1], reverse=True)[:10]
+            except Exception as e:
+                # Fallback if advanced NLP fails
+                pos_terms = get_top_words(df[df["Sentiment"] == "Positive"]["Cleaned_Review"], 5)
+                neg_terms = get_top_words(df[df["Sentiment"] == "Negative"]["Cleaned_Review"], 5)
+            
+            # 5. Correlation analysis
+            # Find correlations between ratings and specific terms/phrases
+            correlations = []
+            if "rating_num" in df.columns and df["rating_num"].notna().any():
+                try:
+                    # Check if we have phrases from earlier analysis
+                    if phrase_data:
+                        for phrase_info in phrase_data[:15]:  # Check top phrases
+                            phrase = phrase_info['phrase']
+                            # Create a temporary column indicating if review contains phrase
+                            df['temp_has_phrase'] = df['Cleaned_Review'].str.contains(phrase, case=False, na=False).astype(int)
+                            # Calculate correlation with rating
+                            corr = df['rating_num'].corr(df['temp_has_phrase'])
+                            if not pd.isna(corr) and abs(corr) > 0.15:  # Meaningful correlation threshold
+                                correlations.append({
+                                    'phrase': phrase,
+                                    'correlation': corr,
+                                    'sentiment': phrase_info['sentiment_label']
+                                })
+                            # Clean up temporary column
+                            df.drop('temp_has_phrase', axis=1, inplace=True)
+                except Exception:
+                    pass
+            
+            # 6. Extract high-impact reviews
+            # Find reviews with very low ratings but detailed feedback
+            high_impact_reviews = []
+            if "rating_num" in df.columns:
+                low_rating_detailed = df[(df["rating_num"] <= 2) & (df["Cleaned_Review"].str.len() > 100)]
+                if len(low_rating_detailed) > 0:
+                    for _, row in low_rating_detailed.head(3).iterrows():
+                        high_impact_reviews.append({
+                            'rating': row['rating_num'],
+                            'snippet': row['snippet'][:150] + "..." if len(row['snippet']) > 150 else row['snippet']
+                        })
+            
+            # 7. Now generate insights based on all this analysis
+            insights = {
+                "strengths": [],
+                "improvements": [],
+                "actions": []
+            }
+            
+            # STRENGTH INSIGHTS
+            if positive_pct > 70:
+                insights["strengths"].append(f"Extremely positive sentiment profile with {positive_pct:.1f}% positive reviews - you're outperforming most businesses in customer satisfaction")
+            elif positive_pct > 60:
+                insights["strengths"].append(f"Strong positive sentiment with {positive_pct:.1f}% positive reviews - your customers are generally satisfied")
+            
+            if avg_rating and avg_rating > 4.2:
+                insights["strengths"].append(f"Impressive average rating of {avg_rating:.1f}/5.0 - significantly above industry average")
+            elif avg_rating and avg_rating > 3.8:
+                insights["strengths"].append(f"Solid average rating of {avg_rating:.1f}/5.0 - customers generally rate you favorably")
+            
+            # Add insights from positive terms/phrases
+            if pos_terms:
+                # Extract just the terms without scores for readability
+                if isinstance(pos_terms[0], tuple):
+                    top_pos_terms = [term for term, _ in pos_terms[:5]]
+                else:
+                    top_pos_terms = [term for term, _ in pos_terms[:5]]
+                
+                # Analyze the positive terms for themes
+                service_terms = ['service', 'staff', 'friendly', 'helpful', 'professional']
+                product_terms = ['food', 'quality', 'product', 'delicious', 'taste', 'fresh']
+                value_terms = ['value', 'price', 'affordable', 'worth']
+                experience_terms = ['atmosphere', 'environment', 'ambiance', 'clean', 'comfortable']
+                
+                pos_themes = []
+                if any(term in top_pos_terms or any(term in pt for pt in top_pos_terms) for term in service_terms):
+                    pos_themes.append("customer service")
+                if any(term in top_pos_terms or any(term in pt for pt in top_pos_terms) for term in product_terms):
+                    pos_themes.append("product quality")
+                if any(term in top_pos_terms or any(term in pt for pt in top_pos_terms) for term in value_terms):
+                    pos_themes.append("value for money")
+                if any(term in top_pos_terms or any(term in pt for pt in top_pos_terms) for term in experience_terms):
+                    pos_themes.append("customer experience")
+                
+                if pos_themes:
+                    themes_str = ", ".join(pos_themes[:-1]) + (" and " + pos_themes[-1] if len(pos_themes) > 1 else pos_themes[0])
+                    insights["strengths"].append(f"You excel in {themes_str} based on customer feedback analysis")
+                
+                # Add specific term analysis
+                insights["strengths"].append(f"Key positive terms in reviews: {', '.join(top_pos_terms)}")
+            
+            # Add insights from positive phrases if available
+            if phrase_data:
+                pos_phrases = [p for p in phrase_data if p['sentiment_label'] == 'Positive'][:3]
+                if pos_phrases:
+                    phrase_str = ", ".join([f'"{p["phrase"]}"' for p in pos_phrases])
+                    insights["strengths"].append(f"Customers frequently praise these aspects: {phrase_str}")
+                    
+                    # If we have contexts, provide a specific example
+                    if any(p['contexts'] for p in pos_phrases):
+                        for p in pos_phrases:
+                            if p['contexts']:
+                                insights["strengths"].append(f'Example positive feedback: "{p["contexts"][0]}"')
+                                break
+            
+            # IMPROVEMENT INSIGHTS
+            if negative_pct > 30:
+                insights["improvements"].append(f"Concerning level of negative sentiment ({negative_pct:.1f}%) requires immediate attention")
+            elif negative_pct > 15:
+                insights["improvements"].append(f"Moderate negative sentiment ({negative_pct:.1f}%) suggests room for improvement")
+            
+            if avg_rating and avg_rating < 3.5:
+                insights["improvements"].append(f"Below average rating of {avg_rating:.1f}/5.0 indicates significant customer satisfaction issues")
+            elif avg_rating and avg_rating < 4.0:
+                insights["improvements"].append(f"Average rating of {avg_rating:.1f}/5.0 has potential for improvement")
+            
+            # Add insights from negative terms/phrases
+            if neg_terms:
+                # Extract just the terms without scores for readability
+                if isinstance(neg_terms[0], tuple):
+                    top_neg_terms = [term for term, _ in neg_terms[:5]]
+                else:
+                    top_neg_terms = [term for term, _ in neg_terms[:5]]
+                
+                # Analyze negative terms for themes
+                service_issues = ['slow', 'rude', 'wait', 'service', 'staff', 'unprofessional']
+                product_issues = ['quality', 'poor', 'bad', 'cold', 'tasteless', 'stale', 'overcooked']
+                value_issues = ['expensive', 'overpriced', 'cost', 'price', 'value']
+                experience_issues = ['dirty', 'noise', 'crowded', 'uncomfortable', 'ambiance']
+                
+                neg_themes = []
+                if any(term in top_neg_terms or any(term in pt for pt in top_neg_terms) for term in service_issues):
+                    neg_themes.append("customer service")
+                if any(term in top_neg_terms or any(term in pt for pt in top_neg_terms) for term in product_issues):
+                    neg_themes.append("product quality")
+                if any(term in top_neg_terms or any(term in pt for pt in top_neg_terms) for term in value_issues):
+                    neg_themes.append("value perception")
+                if any(term in top_neg_terms or any(term in pt for pt in top_neg_terms) for term in experience_issues):
+                    neg_themes.append("facility conditions")
+                
+                if neg_themes:
+                    themes_str = ", ".join(neg_themes[:-1]) + (" and " + neg_themes[-1] if len(neg_themes) > 1 else neg_themes[0])
+                    insights["improvements"].append(f"Critical areas needing improvement: {themes_str}")
+                
+                # Add specific term analysis
+                insights["improvements"].append(f"Key negative terms in reviews: {', '.join(top_neg_terms)}")
+            
+            # Add insights from negative phrases if available
+            if phrase_data:
+                neg_phrases = [p for p in phrase_data if p['sentiment_label'] == 'Negative'][:3]
+                if neg_phrases:
+                    phrase_str = ", ".join([f'"{p["phrase"]}"' for p in neg_phrases])
+                    insights["improvements"].append(f"Recurring customer complaints focus on: {phrase_str}")
+                    
+                    # If we have contexts, provide a specific example
+                    if any(p['contexts'] for p in neg_phrases):
+                        for p in neg_phrases:
+                            if p['contexts']:
+                                insights["improvements"].append(f'Example negative feedback: "{p["contexts"][0]}"')
+                                break
+            
+            # Add insights from high-impact reviews
+            if high_impact_reviews:
+                review = high_impact_reviews[0]
+                insights["improvements"].append(f'Consider this critical low-rated feedback: "{review["snippet"]}"')
+            
+            # ACTIONABLE RECOMMENDATIONS
+            # Add correlation-based actions
+            if correlations:
+                for corr in correlations[:2]:
+                    if corr['correlation'] > 0:
+                        insights["actions"].append(f'Emphasize "{corr["phrase"]}" in your service/product as it strongly correlates with higher ratings')
+                    else:
+                        insights["actions"].append(f'Address issues related to "{corr["phrase"]}" as it strongly correlates with lower ratings')
+            
+            # Create industry-specific action items based on themes identified
+            if 'customer service' in neg_themes:
+                insights["actions"].append("Implement staff training focused on customer interaction and service efficiency")
+            if 'product quality' in neg_themes:
+                insights["actions"].append("Review product/food quality control processes and implement consistency checks")
+            if 'value perception' in neg_themes:
+                insights["actions"].append("Evaluate pricing strategy or enhance value communication to address price sensitivity concerns")
+            if 'facility conditions' in neg_themes:
+                insights["actions"].append("Conduct a thorough facility audit and prioritize cleanliness/comfort improvements")
+            
+            # Add smart actionable recommendations based on sentiment profile
+            if positive_pct < 50:
+                insights["actions"].append("Consider conducting focus groups with dissatisfied customers to gain deeper understanding of their concerns")
+            
+            # Add general strategic recommendations
+            insights["actions"].append("Implement a systematic review response strategy, prioritizing detailed responses to negative reviews")
+            
+            if negative_pct > 20:
+                insights["actions"].append("Develop a 90-day improvement plan focusing on the top 3 customer pain points identified in this analysis")
+            
+            # Return all insights
+            return insights
+        
+        # Generate the AI-powered recommendations
+        with st.spinner("Generating AI insights..."):
+            recommendations = generate_ai_recommendations(df, phrase_data)
+            
+            # Display recommendations in an attractive format
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("### 🌟 Strengths & Competitive Advantages")
+                if recommendations["strengths"]:
+                    for i, insight in enumerate(recommendations["strengths"], 1):
+                        st.markdown(f"""
+                        <div style="background-color:#f0f7ff; border-left:4px solid #2e7d32; padding:15px; margin-bottom:10px; border-radius:5px;">
+                            <strong>{i}.</strong> {insight}
+                        </div>
+                        """, unsafe_allow_html=True)
+                else:
+                    st.info("Not enough data to generate strength insights")
+            
+            with col2:
+                st.markdown("### 🔍 Critical Improvement Areas")
+                if recommendations["improvements"]:
+                    for i, insight in enumerate(recommendations["improvements"], 1):
+                        st.markdown(f"""
+                        <div style="background-color:#fff8e1; border-left:4px solid #e65100; padding:15px; margin-bottom:10px; border-radius:5px;">
+                            <strong>{i}.</strong> {insight}
+                        </div>
+                        """, unsafe_allow_html=True)
+                else:
+                    st.info("Not enough data to generate improvement insights")
+                
+            # Add a section for actionable next steps
+            if recommendations["actions"]:
+                st.markdown('<div class="subsection-divider"></div>', unsafe_allow_html=True)
+                st.markdown("### 📝 Strategic Action Plan")
+                
+                for i, action in enumerate(recommendations["actions"], 1):
+                    st.markdown(f"""
+                    <div style="background-color:#e8f5e9; border-left:4px solid #0277bd; padding:15px; margin-bottom:10px; border-radius:5px;">
+                        <strong>Action {i}:</strong> {action}
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                # Add implementation timeline suggestion
+                st.markdown("### ⏱️ Suggested Implementation Timeline")
+                
+                timeline_data = {
+                    "Immediate (1-2 weeks)": recommendations["actions"][:2] if len(recommendations["actions"]) >= 2 else recommendations["actions"],
+                    "Short-term (1 month)": recommendations["actions"][2:4] if len(recommendations["actions"]) >= 4 else recommendations["actions"][2:] if len(recommendations["actions"]) > 2 else [],
+                    "Medium-term (2-3 months)": recommendations["actions"][4:] if len(recommendations["actions"]) > 4 else []
+                }
+                
+                for timeframe, actions in timeline_data.items():
+                    if actions:
+                        st.markdown(f"#### {timeframe}")
+                        for action in actions:
+                            st.markdown(f"- {action}")
+    except Exception as e:
+        st.warning(f"Error generating advanced recommendations: {str(e)}")
+        # Fallback to simpler analysis if the advanced one fails
+        st.markdown("Falling back to basic recommendations due to analysis complexity.")
+        
+        # Simple recommendations
+        try:
+            # Basic sentiment analysis
+            sentiment_counts = df["Sentiment"].value_counts()
+            pos_pct = sentiment_counts.get("Positive", 0) / len(df) * 100 if len(df) > 0 else 0
+            neg_pct = sentiment_counts.get("Negative", 0) / len(df) * 100 if len(df) > 0 else 0
+            
+            # Get top words
+            pos_words = get_top_words(df[df["Sentiment"] == "Positive"]["Cleaned_Review"], 5)
+            neg_words = get_top_words(df[df["Sentiment"] == "Negative"]["Cleaned_Review"], 5)
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("### Strengths")
+                st.markdown(f"- {pos_pct:.1f}% of reviews are positive")
+                if pos_words:
+                    st.markdown(f"- Top positive words: {', '.join([word for word, _ in pos_words])}")
+                
+            with col2:
+                st.markdown("### Areas for Improvement")
+                st.markdown(f"- {neg_pct:.1f}% of reviews are negative")
+                if neg_words:
+                    st.markdown(f"- Top negative words: {', '.join([word for word, _ in neg_words])}")
+        except Exception as e:
+            st.error(f"Could not generate recommendations: {str(e)}")
     
     # Download Results
     try:
@@ -698,5 +1334,11 @@ else:
         - 🔍 **Common Words Analysis**: Discover what words customers mention most often
         - ☁️ **Word Clouds**: Visualize common words in positive and negative reviews
         - 📊 **Sentiment Analysis**: AI-powered sentiment detection using VADER
+        - 🧩 **Smart Phrase Analysis**: Extract meaningful phrases and their contexts
+        - 📚 **Topic Modeling**: Discover hidden themes in your customer reviews
+        - 🌍 **Multi-language Support**: Analyze reviews in Swahili and other languages
         - 💡 **Smart Recommendations**: Get actionable business advice based on customer feedback
         """)
+
+# Requirements for this application
+# pip install streamlit pandas nltk matplotlib wordcloud serpapi gensim spacy textblob scikit-learn googletrans==4.0.0-rc1 plotly seaborn
